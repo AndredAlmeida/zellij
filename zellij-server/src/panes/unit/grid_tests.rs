@@ -1,9 +1,10 @@
-use super::super::Grid;
+use super::super::{Grid, Row};
 use crate::panes::grid::SixelImageStore;
 use crate::panes::link_handler::LinkHandler;
+use crate::panes::terminal_character::{TerminalCharacter, EMPTY_TERMINAL_CHARACTER};
 use insta::assert_snapshot;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use vte;
 use zellij_utils::{
@@ -22,6 +23,21 @@ fn read_fixture(fixture_name: &str) -> Vec<u8> {
     path_to_file.push(fixture_name);
     std::fs::read(path_to_file)
         .unwrap_or_else(|_| panic!("could not read fixture {:?}", &fixture_name))
+}
+
+fn canonical_row(contents: &str) -> Row {
+    let columns = contents
+        .chars()
+        .map(TerminalCharacter::new_singlewidth)
+        .collect::<VecDeque<_>>();
+    Row::from_columns(columns).canonical()
+}
+
+fn row_contents(row: &Row) -> String {
+    row.columns
+        .iter()
+        .map(|character| character.character)
+        .collect()
 }
 
 #[test]
@@ -2951,6 +2967,116 @@ pub fn full_screen_scroll_region_and_scroll_up() {
     grid.scroll_up_one_line();
     grid.scroll_up_one_line();
     assert_snapshot!(format!("{:?}", grid));
+}
+
+#[test]
+fn partial_scroll_region_with_top_margin_zero_moves_history_into_scrollback() {
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
+    let debug = false;
+    let arrow_fonts = true;
+    let styled_underlines = true;
+    let osc8_hyperlinks = true;
+    let explicitly_disable_kitty_keyboard_protocol = false;
+    let mut grid = Grid::new(
+        5,
+        20,
+        Rc::new(RefCell::new(Palette::default())),
+        terminal_emulator_color_codes,
+        Rc::new(RefCell::new(LinkHandler::new())),
+        Rc::new(RefCell::new(None)),
+        sixel_image_store,
+        Style::default(),
+        debug,
+        arrow_fonts,
+        styled_underlines,
+        osc8_hyperlinks,
+        explicitly_disable_kitty_keyboard_protocol,
+    );
+    grid.viewport = VecDeque::from(vec![
+        canonical_row("line 1"),
+        canonical_row("line 2"),
+        canonical_row("line 3"),
+        canonical_row("line 4"),
+        canonical_row("footer"),
+    ]);
+    grid.set_scroll_region(0, Some(3));
+    grid.move_cursor_to_line(3, EMPTY_TERMINAL_CHARACTER);
+    grid.move_cursor_to_beginning_of_line();
+
+    grid.add_canonical_line();
+
+    assert_eq!(
+        grid.lines_above
+            .iter()
+            .map(row_contents)
+            .collect::<Vec<_>>(),
+        vec!["line 1".to_owned()],
+    );
+    assert_eq!(
+        grid.viewport.iter().map(row_contents).collect::<Vec<_>>(),
+        vec![
+            "line 2".to_owned(),
+            "line 3".to_owned(),
+            "line 4".to_owned(),
+            String::new(),
+            "footer".to_owned(),
+        ],
+    );
+}
+
+#[test]
+fn scroll_up_escape_in_partial_scroll_region_moves_history_into_scrollback() {
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
+    let debug = false;
+    let arrow_fonts = true;
+    let styled_underlines = true;
+    let osc8_hyperlinks = true;
+    let explicitly_disable_kitty_keyboard_protocol = false;
+    let mut grid = Grid::new(
+        5,
+        20,
+        Rc::new(RefCell::new(Palette::default())),
+        terminal_emulator_color_codes,
+        Rc::new(RefCell::new(LinkHandler::new())),
+        Rc::new(RefCell::new(None)),
+        sixel_image_store,
+        Style::default(),
+        debug,
+        arrow_fonts,
+        styled_underlines,
+        osc8_hyperlinks,
+        explicitly_disable_kitty_keyboard_protocol,
+    );
+    grid.viewport = VecDeque::from(vec![
+        canonical_row("line 1"),
+        canonical_row("line 2"),
+        canonical_row("line 3"),
+        canonical_row("line 4"),
+        canonical_row("footer"),
+    ]);
+    grid.set_scroll_region(0, Some(3));
+
+    grid.rotate_scroll_region_down(1);
+
+    assert_eq!(
+        grid.lines_above
+            .iter()
+            .map(row_contents)
+            .collect::<Vec<_>>(),
+        vec!["line 1".to_owned()],
+    );
+    assert_eq!(
+        grid.viewport.iter().map(row_contents).collect::<Vec<_>>(),
+        vec![
+            "line 2".to_owned(),
+            "line 3".to_owned(),
+            "line 4".to_owned(),
+            " ".repeat(20),
+            "footer".to_owned(),
+        ],
+    );
 }
 
 #[test]
