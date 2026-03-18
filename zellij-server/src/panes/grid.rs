@@ -1574,7 +1574,9 @@ impl Grid {
         let mut pad_character = EMPTY_TERMINAL_CHARACTER;
         pad_character.styles = self.cursor.pending_styles.clone();
         for _ in 0..count {
-            if scroll_region_top < self.viewport.len() {
+            if scroll_region_top == 0 && self.alternate_screen_state.is_none() {
+                self.transfer_top_row_of_viewport_to_lines_above();
+            } else if scroll_region_top < self.viewport.len() {
                 self.viewport.remove(scroll_region_top);
             }
             let columns = VecDeque::from(vec![pad_character.clone(); self.width]);
@@ -1617,14 +1619,19 @@ impl Grid {
                 // the state is corrupted
                 return;
             }
-            if scroll_region_bottom == self.height.saturating_sub(1) && scroll_region_top == 0 {
+            if scroll_region_top == 0 {
                 if self.alternate_screen_state.is_none() {
-                    self.transfer_rows_to_lines_above(1);
+                    self.transfer_top_row_of_viewport_to_lines_above();
                 } else if !self.viewport.is_empty() {
                     self.viewport.pop_front();
                 }
 
-                self.viewport.push_back(Row::new().canonical());
+                if scroll_region_bottom < self.viewport.len() {
+                    self.viewport
+                        .insert(scroll_region_bottom, Row::new().canonical());
+                } else {
+                    self.viewport.push_back(Row::new().canonical());
+                }
                 self.selection.move_up(1);
             } else {
                 if scroll_region_top < self.viewport.len() {
@@ -2663,6 +2670,30 @@ impl Grid {
             self.width,
         );
 
+        self.scrollback_buffer_lines =
+            subtract_isize_from_usize(self.scrollback_buffer_lines, transferred_rows_count);
+    }
+    fn transfer_top_row_of_viewport_to_lines_above(&mut self) {
+        let Some(top_row) = self.viewport.pop_front() else {
+            return;
+        };
+        let mut top_rows = vec![];
+        let mut transferred_rows_count =
+            calculate_row_display_height(top_row.width(), self.width) as isize;
+        if !top_row.is_canonical {
+            let mut bottom_canonical_row_and_wraps_in_dst =
+                get_lines_above_bottom_canonical_row_and_wraps(&mut self.lines_above);
+            top_rows.append(&mut bottom_canonical_row_and_wraps_in_dst);
+        }
+        top_rows.push(top_row);
+        let dropped_line_width = bounded_push(
+            &mut self.lines_above,
+            &mut self.sixel_grid,
+            Row::from_rows(top_rows),
+        );
+        if let Some(width) = dropped_line_width {
+            transferred_rows_count -= calculate_row_display_height(width, self.width) as isize;
+        }
         self.scrollback_buffer_lines =
             subtract_isize_from_usize(self.scrollback_buffer_lines, transferred_rows_count);
     }
